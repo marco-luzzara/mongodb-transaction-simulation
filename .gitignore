@@ -1,3 +1,9 @@
+# VSCode
+.vscode/
+
+# Docker
+docker/keys/
+
 # Logs
 logs
 *.log
@@ -69,7 +75,6 @@ typings/
 .yarn-integrity
 
 # dotenv environment variables file
-.env
 .env.test
 
 # parcel-bundler cache (https://parceljs.org/)

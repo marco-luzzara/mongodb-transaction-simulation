@@ -1,0 +1,65 @@
+services:
+    mongo_replica1:
+        image: mongo:latest
+        container_name: mongo_replica1
+        hostname: mongo_replica1
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key
+            - mongo_replica_data1:/data/db
+        env_file: 
+            - ./envs/mongo_replica/.env
+        ports: 
+            - "${MONGO_PORT1}:27017"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+        healthcheck:
+            test: test $$(echo "rs.status().ok" | mongo -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} --quiet) -eq 1
+            interval: 30s
+            timeout: 5m
+            start_period: 60s
+            retries: 5
+    mongo_replica2:
+        image: mongo:latest
+        container_name: mongo_replica2
+        hostname: mongo_replica2
+        depends_on:
+            mongo_replica1:
+                condition: service_healthy
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key
+            - mongo_replica_data2:/data/db
+        env_file: 
+            - ./envs/mongo_replica/.env
+        ports: 
+            - "${MONGO_PORT2}:27017"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+    mongo_replica3:
+        image: mongo:latest
+        container_name: mongo_replica3
+        hostname: mongo_replica3
+        depends_on:
+            mongo_replica1:
+                condition: service_healthy
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key
+            - mongo_replica_data3:/data/db
+        env_file: 
+            - ./envs/mongo_replica/.env
+        ports: 
+            - "${MONGO_PORT3}:27017"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+volumes:
+    mongo_replica_data1:
+        external: true
+    mongo_replica_data2:
+        external: true
+    mongo_replica_data3:
+        external: true
+
+networks: 
+    mongo_replica_network:

@@ -1,0 +1,30 @@
+{
+  "name": "transaction-simulation",
+  "version": "1.0.0",
+  "description": "workbench for transactions in mongodb",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm test",
+    "start_mongo_si": "node -r dotenv/config index.js dotenv_config_path=envs/mongo_si/.env"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marco-luzzara/mongodb-transaction-simulation.git"
+  },
+  "keywords": [
+    "mongodb",
+    "transactions"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/marco-luzzara/mongodb-transaction-simulation/issues"
+  },
+  "homepage": "https://github.com/marco-luzzara/mongodb-transaction-simulation#readme",
+  "dependencies": {
+    "dotenv": "^8.2.0",
+    "express": "^4.17.1",
+    "mongodb": "^3.6.4",
+    "mongoose": "^5.12.0"
+  }
+}
