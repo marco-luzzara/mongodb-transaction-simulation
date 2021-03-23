@@ -8,17 +8,17 @@ var cfg = {
     "members": [
         {
             "_id": 0,
-            "host": "${MONGO_HOST1}:${MONGO_PORT1}",
+            "host": "localhost:${MONGO_PORT1}",
             "priority": 2
         },
         {
             "_id": 1,
-            "host": "${MONGO_HOST2}:${MONGO_PORT2}",
+            "host": "localhost:${MONGO_PORT2}",
             "priority": 0
         },
         {
             "_id": 2,
-            "host": "${MONGO_HOST3}:${MONGO_PORT3}",
+            "host": "localhost:${MONGO_PORT3}",
             "priority": 0,
         }
     ]
