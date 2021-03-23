@@ -2,7 +2,7 @@
 .vscode/
 
 # Docker
-docker/keys/
+docker/replica/keys/
 
 # Logs
 logs

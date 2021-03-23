@@ -16,15 +16,18 @@ done
 # keyfile creation
 if [[ ! -f ./keys/mongo_replica.key ]]
 then
+    echo "key creation"
     mkdir -p keys
 
     openssl rand -base64 756 > ./keys/mongo_replica.key
     chmod 400 ./keys/mongo_replica.key
+    chown 999:999 ./keys/mongo_replica.key
 fi
 
+chmod a+x replica_config_script.sh
 # docker compose start
 docker container inspect mongo_replica1 &> /dev/null && echo "mongo_replicas already exist" || \
-    docker-compose --project-directory . -f ./compose/docker-compose.replica.yml up -d --no-recreate
+    docker-compose up -d --no-recreate
 
 for ((i = 1; i <= 3; i++))
 do 

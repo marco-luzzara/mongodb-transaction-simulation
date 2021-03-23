@@ -1,1 +1,0 @@
-docker-compose --project-directory . -f ./compose/docker-compose.replica.yml down

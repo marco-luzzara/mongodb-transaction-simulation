@@ -1,0 +1,95 @@
+services:
+    mongo_config_replica:
+        image: mongo:latest
+        container_name: mongo_config_replica
+        hostname: mongo_config
+        depends_on:
+            mongo_replica1:
+                condition: service_healthy
+            mongo_replica2:
+                condition: service_healthy
+            mongo_replica3:
+                condition: service_healthy
+        volumes:
+            - ./replica_config_script.sh:/scripts/replica_config_script.sh:ro
+        env_file: 
+            - .env
+        networks: 
+            - mongo_replica_network
+        entrypoint: ["bash", "/scripts/replica_config_script.sh"]
+    mongo_replica1:
+        image: mongo:latest
+        container_name: ${MONGO_HOST1}
+        hostname: ${MONGO_HOST1}
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key:ro
+            - mongo_replica_data1:/data/db
+        env_file: 
+            - .env
+        ports: 
+            - "${MONGO_PORT1}:${MONGO_PORT1}"
+        expose: 
+            - "${MONGO_PORT1}"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--port", "${MONGO_PORT1}", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+        healthcheck:
+            test: echo "show log global" | mongo --host localhost:$${MONGO_PORT1} -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} | grep "Waiting for connections"
+            interval: 10s
+            timeout: 10s
+            start_period: 10s
+            retries: 5
+    mongo_replica2:
+        image: mongo:latest
+        container_name: ${MONGO_HOST2}
+        hostname: ${MONGO_HOST2}
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key:ro
+            - mongo_replica_data2:/data/db
+        env_file: 
+            - .env
+        ports: 
+            - "${MONGO_PORT2}:${MONGO_PORT2}"
+        expose: 
+            - "${MONGO_PORT2}"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--port", "${MONGO_PORT2}", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+        healthcheck:
+            test: echo "show log global" | mongo --host localhost:$${MONGO_PORT2} -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} | grep "Waiting for connections"
+            interval: 10s
+            timeout: 10s
+            start_period: 10s
+            retries: 5
+    mongo_replica3:
+        image: mongo:latest
+        container_name: ${MONGO_HOST3}
+        hostname: ${MONGO_HOST3}
+        volumes:
+            - ./keys/mongo_replica.key:/auth/mongo_replica.key:ro
+            - mongo_replica_data3:/data/db
+        env_file: 
+            - .env
+        expose: 
+            - "${MONGO_PORT3}"
+        ports: 
+            - "${MONGO_PORT3}:${MONGO_PORT3}"
+        networks: 
+            - mongo_replica_network
+        command: ["--keyFile", "/auth/mongo_replica.key", "--port", "${MONGO_PORT3}", "--replSet", "${MONGO_REPLICA_SET_NAME}", "--bind_ip_all"]
+        healthcheck:
+            test: echo "show log global" | mongo --host localhost:$${MONGO_PORT3} -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} | grep "Waiting for connections"
+            interval: 10s
+            timeout: 10s
+            start_period: 10s
+            retries: 5
+volumes:
+    mongo_replica_data1:
+        external: true
+    mongo_replica_data2:
+        external: true
+    mongo_replica_data3:
+        external: true
+
+networks: 
+    mongo_replica_network:
