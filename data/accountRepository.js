@@ -7,7 +7,7 @@ const ACCOUNT_COLL = constants.ACCOUNT_COLL;
 const TRANSACTION_COLL = constants.TRANSACTION_COLL;
 let db = undefined;
 
-let client = clientProvider();
+let client = clientProvider.connectToReplicaSet();
 client.connect((err, client) => {
     if (err)
         throw err;

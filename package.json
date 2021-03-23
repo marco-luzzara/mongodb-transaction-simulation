@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "npm test",
-    "start_mongo_si": "node -r dotenv/config index.js dotenv_config_path=envs/mongo_si/.env"
+    "start_replicaSet": "node -r dotenv/config index.js dotenv_config_path=envs/mongo_replica/.env"
   },
   "repository": {
     "type": "git",
