@@ -1,65 +1,60 @@
-const Transaction = require("../model/transaction");
+const MoneyTransaction = require("../model/moneyTransaction");
 const constants = require('../constants');
 
-const clientProvider = require("./clientProvider");
-const DB_NAME = process.env.DB_NAME;
+const cp = require("./clientProvider");
 const ACCOUNT_COLL = constants.ACCOUNT_COLL;
 const TRANSACTION_COLL = constants.TRANSACTION_COLL;
-let db = undefined;
 
-const mongoTransactionDefaultConfig = {
+const sessionDefaultConfig = {
     readPreference: 'primary',
     readConcern: { level: 'local' },
-    writeConcern: { w: 'majority' }
+    writeConcern: { w: 1 }
 }
 
-let client = clientProvider.connectToReplicaSet();
-client.connect((err, client) => {
-    if (err)
-        throw err;
-    db = client.db(DB_NAME);
-});
+async function changeBalance(user, value, session) {
+    const updatedAccount = await cp.db.collection(ACCOUNT_COLL).findOneAndUpdate(
+        { "owner": user },
+        { "$inc": { "balance": value } },
+        { session }
+    );
 
-async function createTransaction(from, to, value, mongoTransactionConfig = {}) {
-    const newTransaction = new Transaction(from, to, value);
+    if (updatedAccount.value === null)
+        throw new Error(`there is no account with owner=${user}`);
+}
+
+async function freeze(seconds) {
+    return new Promise((resolve, reject) => {
+        setTimeout(() => resolve(), seconds * 1000);
+    });
+}
+
+async function createTransaction(from, to, value, sessionConfig = {}) {
+    const newTransaction = new MoneyTransaction(from, to, value);
     
-    mongoTransactionConfig = {...mongoTransactionDefaultConfig, ...mongoTransactionConfig}
-    const session = client.startSession();
-    let accountTransactionId = -1;
+    sessionConfig = {...sessionDefaultConfig, ...sessionConfig}
 
-    try {
+    let moneyTransactionId = undefined;
+    await cp.client.withSession(sessionConfig, async (session) => {
         await session.withTransaction(async () => {
-            const insertResult = await db.collection(TRANSACTION_COLL)
+            const insertResult = await cp.db.collection(TRANSACTION_COLL)
                 .insertOne(newTransaction, { session });
 
             if (insertResult.insertedCount === 0)
                 throw new Error("no transaction inserted");
 
-            const updatedFromAccount = await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": from },
-                { "$inc": { "balance": -value } }, 
-                { session }
-            );
-            
-            if (updatedFromAccount.value === null) 
-                throw new Error(`there is no account with owner=${from}`);
+            await changeBalance(from, -value, session);
+            let accounts = await cp.db.collection(ACCOUNT_COLL, { "readPreference": "secondary", "readConcern": "available" }).find().toArray();
+            console.log(accounts);
 
-            const updatedToAccount = await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": to },
-                { "$inc": { "balance": value } }, 
-                { session }
-            );
-            
-            if (updatedToAccount.value === null) 
-                throw new Error(`there is no account with owner=${to}`);
+            await freeze(5);
 
-            accountTransactionId = insertResult.insertedId;
-        }, mongoTransactionConfig);
-    } finally {
-        await session.endSession();
-    }
+            await changeBalance(to, value, session);
 
-    return accountTransactionId;
+            moneyTransactionId = insertResult.insertedId;
+        }, sessionConfig);
+    });
+
+    return moneyTransactionId;
 }
 
 module.exports = {

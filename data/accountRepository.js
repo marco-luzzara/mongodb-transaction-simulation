@@ -1,26 +1,18 @@
 const Account = require("../model/account");
 const constants = require('../constants');
 
-const clientProvider = require("./clientProvider");
-const DB_NAME = process.env.DB_NAME;
+const cp = require("./clientProvider");
 const ACCOUNT_COLL = constants.ACCOUNT_COLL;
 const TRANSACTION_COLL = constants.TRANSACTION_COLL;
-let db = undefined;
 
-let client = clientProvider.connectToReplicaSet();
-client.connect((err, client) => {
-    if (err)
-        throw err;
-    db = client.db(DB_NAME);
-});
+async function getAccounts(options = {}) {
 
-async function getAccounts() {
-    return await db.collection(ACCOUNT_COLL)
+    return await cp.db.collection(ACCOUNT_COLL, options)
         .find().toArray();
 }
 
-async function getAccountTransactions(owner) {
-    return await db.collection(TRANSACTION_COLL)
+async function getAccountTransactions(owner, options = {}) {
+    return await cp.db.collection(TRANSACTION_COLL, options)
         .find({
             "$or": [
                 { "from": owner },
@@ -29,10 +21,10 @@ async function getAccountTransactions(owner) {
         }).toArray();
 }
 
-async function insertAccount(owner, balance) {
+async function insertAccount(owner, balance, options = {}) {
     const newAccount = new Account(owner, balance);
 
-    const insertResult = await db.collection(ACCOUNT_COLL)
+    const insertResult = await cp.db.collection(ACCOUNT_COLL, options)
         .insertOne(newAccount);
 
     if (insertResult.insertedCount === 0)
