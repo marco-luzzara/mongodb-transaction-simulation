@@ -1,5 +1,7 @@
 const accountRouter = require('./api/account');
 const transactionRouter = require('./api/transaction');
+const clientWrapper = require('./util/mongoClientWrapper');
+
 const express = require('express');
 
 const PORT = process.env.PORT;
@@ -13,5 +15,14 @@ app.use(function (err, req, res, next) {
     res.send(err.message);
 })
 
-app.listen(PORT, () => console.log(`server successfully started on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`server successfully started on port ${PORT}`));
+
+process.on('SIGTERM', () => {
+    debug('SIGTERM signal received: closing HTTP server')
+    server.close(() => {
+        clientWrapper(async (client, db) => {
+            await client.close();
+        });
+    })
+})
 

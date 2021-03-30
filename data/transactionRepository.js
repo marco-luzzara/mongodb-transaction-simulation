@@ -1,7 +1,7 @@
 const MoneyTransaction = require("../model/moneyTransaction");
 const constants = require('../constants');
 
-const cp = require("./clientProvider");
+const clientWrapper = require("../util/mongoClientWrapper");
 const ACCOUNT_COLL = constants.ACCOUNT_COLL;
 const TRANSACTION_COLL = constants.TRANSACTION_COLL;
 
@@ -11,8 +11,8 @@ const sessionDefaultConfig = {
     writeConcern: { w: 1 }
 }
 
-async function changeBalance(user, value, session) {
-    const updatedAccount = await cp.db.collection(ACCOUNT_COLL).findOneAndUpdate(
+async function changeBalance(db, user, value, session) {
+    const updatedAccount = await db.collection(ACCOUNT_COLL).findOneAndUpdate(
         { "owner": user },
         { "$inc": { "balance": value } },
         { session }
@@ -29,32 +29,34 @@ async function freeze(seconds) {
 }
 
 async function createTransaction(from, to, value, sessionConfig = {}) {
-    const newTransaction = new MoneyTransaction(from, to, value);
-    
-    sessionConfig = {...sessionDefaultConfig, ...sessionConfig}
+    return await clientWrapper(async (client, db) => {
+        const newTransaction = new MoneyTransaction(from, to, value);
+        
+        sessionConfig = {...sessionDefaultConfig, ...sessionConfig}
 
-    let moneyTransactionId = undefined;
-    await cp.client.withSession(sessionConfig, async (session) => {
-        await session.withTransaction(async () => {
-            const insertResult = await cp.db.collection(TRANSACTION_COLL)
-                .insertOne(newTransaction, { session });
+        let moneyTransactionId = undefined;
+        await client.withSession(sessionConfig, async (session) => {
+            await session.withTransaction(async () => {
+                const insertResult = await db.collection(TRANSACTION_COLL)
+                    .insertOne(newTransaction, { session });
 
-            if (insertResult.insertedCount === 0)
-                throw new Error("no transaction inserted");
+                if (insertResult.insertedCount === 0)
+                    throw new Error("no transaction inserted");
 
-            await changeBalance(from, -value, session);
-            let accounts = await cp.db.collection(ACCOUNT_COLL, { "readPreference": "secondary", "readConcern": "available" }).find().toArray();
-            console.log(accounts);
+                await freeze(3)
 
-            await freeze(5);
+                await changeBalance(db, from, -value, session);
 
-            await changeBalance(to, value, session);
+                await freeze(3);
 
-            moneyTransactionId = insertResult.insertedId;
-        }, sessionConfig);
+                await changeBalance(db, to, value, session);
+
+                moneyTransactionId = insertResult.insertedId;
+            }, sessionConfig);
+        });
+
+        return moneyTransactionId;
     });
-
-    return moneyTransactionId;
 }
 
 module.exports = {
