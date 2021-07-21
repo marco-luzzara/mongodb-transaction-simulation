@@ -124,13 +124,13 @@ There are other ways to avoid transactions, besides coding them at the applicati
 - Optimistic concurrency control: it is common in most of the online stores. Even when there is only one item left, more than one user can have it in his/her own shopping cart.
 - Pessimistic concurrency control: you have a certain amount of time before completing your order, after the expiration you have to request for the "lock" again.
 
-There is no real perfect management of transactions, and living without them also means a lot more work to do. Whenever possible, the solution is to **not** use them or reduce their scope as much as possible.
+There is no real perfect management of transactions, and living without them also means a lot more work to do. Whenever possible, the solution is to **not** use them, instead leveraging the flexible data modeling is generally a good idea.
 
 ---
 
 ## MongoDB Document Model
 
-The MondoDB model is based on documents, which are like rows for a SQL database. It is very important to remember that dependently on how we build our schema, we are also deciding whether we are going to need transactions or not. For example, consider the following schema to store users and their accounts (in a one-to-many relationship).
+The MondoDB model is based on documents, which are like rows for a SQL database. It is very important to remember that depending on how we build our schema, we are also deciding whether we are going to need transactions or not. For example, consider the following schema to store users and their accounts (in a one-to-many relationship).
 
 ```
 // Users
@@ -150,7 +150,7 @@ The MondoDB model is based on documents, which are like rows for a SQL database.
 }
 ```
 
-If you model your data in the above way, a simple query to update all the accounts of a user implies touching many documents and in certain cases a transaction might be necessary. **A schema like the following automatically makes transactions useless**:
+If you model your data in the above way, a simple query to update all the accounts of a user implies touching many documents and in certain scenarios a transaction might be necessary. **A schema like the following automatically makes transactions useless**:
 
 ```
 // Users
@@ -168,7 +168,81 @@ If you model your data in the above way, a simple query to update all the accoun
 }
 ```
 
-In this case there is only one document to update and this change is guaranteed to be atomic, even if that only document has arrays or subdocuments inside.
+In this case there is only one document to update and this change is guaranteed to be atomic, even if that only document has arrays or subdocuments inside. When we refer to transactions, we are implicitly talking about multi-document transactions.
+
+## What happens when we create a multi-document transaction?
+
+---
+
+## How does Distributed Transactions work?
+
+We have seen the theory behind multi-document transactions for a single shard, but in a distributed environment, things get a little more complex. There are 3 entities, like in the following figure:
+
+![Distributed transaction structure](./images/distributed_transaction.png)
+
+- **Client**
+- **`mongos` instance**: it is the interface between the client application and the sharded cluster. Its job is to route queries coming from the client and write operations to the correct shards. 
+- **shards**
+
+The client starts the transaction and the `mongos` instance chooses the **Coordinator**, which is the first shard contacted by `mongos` having the targeted data. The coordinator is responsible for the transaction management and success by *coordinating* the operations exchanged between all shards involved.
+
+Let's suppose the transaction is made of 2 update operations, one on shard 0 (the **Coordinator** in this case) and another on shard 1. When the client wants to finish the transaction, it sends a *commit* request to the `mongos` instance, which in turn delegates the coordinator to synchronize the commit on all the shards. When all the shards are ready for it, they all commit and the transaction is successful.
+
+Behind the scenes, the coordinator op-log is the core of the transaction process. Here is a partial json representing the information stored:
+
+```
+{
+    "op": "i",
+    "o": {
+        "_id": {
+            "lsid": {
+                "id": UUID("..."),
+                "uid": BinData("...")
+            },
+            "txnNumber": NumberLong(0)
+        },
+        "participants": [
+            "Transaction-shard-0",
+            "Transaction-shard-1"
+        ]
+    }
+}
+{
+    "op": "c",
+    "o": {
+        "applyOps": [
+            {
+                "op": "u",
+                "ns": "test.demo",
+                "ui": UUID("..."),
+                "o": { ... } // the command executed
+                "o2": { ... } // target documents
+            }
+        ],
+        "prepare": true
+    }
+}
+{
+        ...
+        "participants": [
+            "Transaction-shard-0",
+            "Transaction-shard-1"
+        ],
+        "decision": {
+            "decision": "commit",
+            "commitTimestamp": Timestamp(...)
+        }
+    }
+}
+```
+
+As you can see the `participants` array stores all the shards involved in the transaction. Every shard must log the operations applied, through the `applyOps` array, and specify with the `prepare` field if it has acquired all the locks and it is ready for commit.
+
+In the last log message, the commit is confirmed and written down in the `decision` object, together with its timestamp.
+
+From version 4.2 the op-log maximum size is almost unlimited because every entry related to a transaction is chained with the previous one. Once the transaction commit, all the operations in the chain become visible together. This is obtained with a `ts` field (timestamp) and a pointer to the previous op-log entry (`prevOpTime`).
+
+---
 
 ## Limitations
 
@@ -186,9 +260,11 @@ Beware that, especially when used in a production environment, MongoDB transacti
 
 - If a chunks migration and a transaction interleave, the latter could aborts because of the impossibility of acquiring a lock on a moved document. Chunks migrations must wait for the end of ongoing transactions.
 
+---
+
 ## Conclusions
 
-MongoDB team estimated that you will **not** need multi-document transactions in 80-90% of the projects. For the few cases when they do more good than harm, here are some advices worth to be considered.
+MongoDB team estimated that you will **not** need multi-document transactions in 80-90% of the projects. The main reason is that MongoDB data modeling is flexible enough to let you organize data in a way that an update could affect a single document. For the few cases when they do more good than harm, here are some advices worth to be considered.
 
 First, the time limit is not a limit anymore if configured "appropriately" and the number of documents potentially locked by a transaction is unlimited, but, as always, use common sense. Instead of having a long-running transaction with all the dangers seen, you had better split it into batches of maximum a thousands documents at a time. Adopting long-running transactions has a maybe greater downside, that is locking documents for the whole duration of the transaction.
 
