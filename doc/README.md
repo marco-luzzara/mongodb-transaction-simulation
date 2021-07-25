@@ -1,4 +1,4 @@
-# MongoDB Transactions
+ # MongoDB Transactions
 
 Transactions have been introduced in MongoDB 4.0 with a limited support on replica sets only, from version 4.2 they are available in sharded clusters too. This feature was the result of 9 years of research and development from the MongoDB team, but the surprising fact is that performances of non-transactional operations were not degraded even after this additional complexity in the core logic. Essentially, upgrading to a transactions-supporting version of MongoDB would not make your application less performant. 
 
@@ -13,7 +13,7 @@ As I said, MongoDB Transactions gaurantee ACID properties, which are:
 - **A**tomicity: all the operations in a transaction are committed or none of them are. This was made possible thanks to the integration of the WiredTiger storage engine, that uses a snapshot-based cache.
 - **C**onsistency: a transaction, when committed, cannot bring the database to an invalid state. 
 - **I**solation: isolation ensures that concurrent transactions cannot interfere with each other and with outside operations. In particular, MongoDB transaction operations are invisible until committed and many of the isolations problem can be solved using the appropriate `readConcern` configuration property.
-- **D**urability: this property simply guarantee that, once a transaction commits, its changes are not lost even after a system failure. MongoDB lets you configure the durability by setting the `writeConcern` property. 
+- **D**urability: this property simply guarantee that, once a transaction commits, its changes are not lost even after a system failure. MongoDB lets you configure the durability by setting the `writeConcern` property.
 
 ---
 
@@ -67,8 +67,8 @@ In a SQL database, with the isolation level you can establish whether a transact
     | 1 |                                                    | `INSERT INTO users(id, name, age) VALUES (3, 'Bob', 27); COMMIT;` |
     | 2 | `SELECT * FROM users WHERE age BETWEEN 10 AND 30; COMMIT;` | |
 
-In MongoDB, transactions are completely isolated until the commit point, so from the outside of a transaction, your are never going to see the result of transactional updates and viceversa. You can choose instead when the transaction results become visible, always after it is committed.
-This configuration is expressed through the `readConcern`, that determines when committed data can be retrieved. Basically, it defines the isolation level and could be set at per-operation basis if necessary. Outside transactions there are 5 read-concern levels available, but inside transactions they have been reduced to 3. However, before analyzing them, it is appropriate to understand what is the `readPreference`.
+In MongoDB, transactions are completely isolated until commit point, so from the outside of a transaction your are never going to see the result of transactional updates and experience the described isolation issues. The opposite is true as well. You can choose instead when the transaction results become visible, always after it is committed.
+This configuration is expressed through the `readConcern` property, that determines the moment when committed data can be retrieved. Basically, it defines the *distributed* isolation level and could be set once for the whole transaction, or at per-operation basis outside transactions. In this case there are 5 `read-concern` levels available, but inside transactions they have been reduced to 3. However, before analyzing them, it is appropriate to understand what is the `readPreference`.
 
 ### Read Preference
 
@@ -83,7 +83,7 @@ Read preference describes how MongoDB clients route read operations to the membe
 
 ### Read Concerns
 
-Depending on the pair (`readPreference`, `readConcern`) you could read different versions of the same document. The read concern set for a transaction is applied to all the operations inside it, there are 3 options:
+Depending on the pair (`readPreference`, `readConcern`) you could read different versions of the same document. Regarding the `readConcern`, there are 3 levels:
 
 - **Local**: returns the most recent data available, but with the possibility of a future rollback. A rollback is necessary only if the primary had accepted write operations that the secondaries had not successfully replicated before the primary stepped down. Generally they are very rare and happens on network partitions, but do not occur when the primary fails and at least another replica member was able to replicate the primary's data. This means that if your `readPreference` is **Secondary**, with a **Local** read concern you will never get data that has been later rolled back. The only exception is when you read from a secondary that already replicated changes from a failed primary but is unreachable from the majority of the other replica set members: in this case the secondary must revert its changes as well (unless it becomes the new primary) and you could *successfully* experience a dirty/phantom read. It is like the *Read Uncommitted* isolation level.
 - **Majority**: returns data that has been acknowledged by a majority of the replica set only if the transaction commits with **Majority** write concern. Just because the majority of nodes acknowledged the update, it does not mean that the node you are reading from (unless it is the primary) has already received the fresh update. It simply guarantees that all the next reads are *monotonic*, that is you will never read documents that are later rolled back. It is like the *Read Committed* isolation level. In a sharded cluster it is a little more complex because snapshot views in different shards are not synchronized. If you need this additional guarantee, then use the **Snapshot** read concern.
@@ -171,6 +171,30 @@ If you model your data in the above way, a simple query to update all the accoun
 In this case there is only one document to update and this change is guaranteed to be atomic, even if that only document has arrays or subdocuments inside. When we refer to transactions, we are implicitly talking about multi-document transactions.
 
 ## What happens when we create a multi-document transaction?
+
+A MongoDB transaction is pretty different from a SQL transaction. In both models the concept of isolation level exists, but MongoDB discerns between before-commit and after-commit isolation. I have already talked about ACID properties and how MongoDB is able to guarantee them, but I have deliberately left out how a transaction is isolated in the before-commit phase (the after-commit phase is mainly regulated by the `readConcern`). First concept to understand in order to effectively work with transactions is the **snapshot** isolation level
+
+### **Snapshot** Isolation
+
+Every write in MongoDB has a timestamp assigned, in particular a logical time based on a hybrid [Lamport Clock](https://en.wikipedia.org/wiki/Lamport_timestamp). A snapshot is a point in time that reflects only the prior writes. This means that if I have the following sequence of writes:
+
+| snapshots  |   |   |   | 1 |   |   |   | 2 |   |   |
+|------------|---|---|---|---|---|---|---|---|---|---|
+|   writes   | 1 | 2 | 3 |   | 4 | 5 | 6 |   | 7 | 8 |
+
+The first snapshot shows all writes committed until the 3rd write, the second snapshot shows all writes committed until the 6th write. Subsequent writes, even if committed, are not shown in the snapshot view. MongoDB team decided to force the **snapshot** isolation (it is the only available), that guarantees that all reads made in a transaction will see a consistent snapshot of the database. What are the advantages and disadvantages?
+
+Let's start by saying that this isolation is implemented using multiversion concurrency control (MVCC),  where documents may have different *versions* in memory. This flexibility increases concurrency and performances, even though it cannot fully protect from concurrency anomalies, described [here](https://en.wikipedia.org/wiki/Snapshot_isolation#Definition). This level of isolation relies on an *optimistic concurrency control*: it generally works by assuming that written data is not modified outside the transaction itself, with the possibility of conflict at commit point. In MongoDB this assumption is not completely valid:
+
+- Transactional writes are locking operation, which means that you cannot commit external writes if already locked by a transaction. These operations wait until the lock is released (by transaction commit or rollback).
+
+- Conflicts are solved in a fail-fast way: suppose you have a transaction in progress and an outside operation modifies or deletes one document. That same document is later modified by a transactional `findOneAndUpdate`. There is no reason to wait for commit, it is already clear that it will produce a `WriteConflict`. For this reason MongoDB marks this error as `TransientTransactionError`, making the transaction rollback and immediately retrying it with the new snapshot.
+
+The biggest advantage of **snapshot** isolation is that it prevents dirty/phantom reads and non-repeatable reads, thus providing the maximum level of isolation in terms of "issues coverage". Moreover, MongoDB guarantees the *Read your Own Writes* property.
+
+MongoDB distinguishes between concurrent transaction/transaction and concurrent transaction/operation. The demo shows some examples but the main difference is that in the first case the second transaction rolls back, whereas in the second case the operation blocks behind the transaction commit and infinitely retries with backoff logic until `MaxTimeMS` is reached.
+
+deadlocks?
 
 ---
 
