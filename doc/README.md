@@ -1,4 +1,4 @@
- # MongoDB Transactions
+# MongoDB Transactions
 
 Transactions have been introduced in MongoDB 4.0 with a limited support on replica sets only, from version 4.2 they are available in sharded clusters too. This feature was the result of 9 years of research and development from the MongoDB team, but the surprising fact is that performances of non-transactional operations were not degraded even after this additional complexity in the core logic. Essentially, upgrading to a transactions-supporting version of MongoDB would not make your application less performant. 
 
@@ -19,27 +19,39 @@ As I said, MongoDB Transactions gaurantee ACID properties, which are:
 
 ## Atomicity
 
-Atomicity is a very difficult requirement in a NoDBMS like MongoDB. A reason could be that one of the priority of a NoSQL database is scaling: ensuring atomicity for a transaction that involves many shards must have been a demanding implementation. So, what are the changes that made this implementation possible?
+Atomicity is a very difficult requirement in a NoSQl database like MongoDB. A reason could be that one of the priority of a NoSQL database is scaling: ensuring atomicity for a transaction that involves many shards is definitely more complex than doing it for a single node. So, what are the protagonists that made this implementation possible?
 
 ### Wired Tiger Cache
 
-The transaction path started when MongoDB team was using MMapV1, which provided ACID properties in a non-multi-document and non-multi-collection transaction. Next, they decided to integrate Wired Tiger as the primary storage layer and it is currently the default and only one supporting transactions. This storage engine leverages an internal in-memory cache to store the changes from the last snapshot before flushing them to disk.
+The transaction path started when MongoDB team was using MMapV1, which provided ACID properties in a non-multi-document and non-multi-collection transaction. Next, they decided to integrate WiredTiger as the primary storage layer and it is currently the default and the only one supporting transactions. This storage engine leverages an internal in-memory cache to store changes from the moment when the transaction started, before flushing them to disk.
 
-This is extremely useful for transactions management: all the operations in a transaction are guaranteed to stay in memory until they are committed or rolled back. In this way, operations in a transaction are made persistent only when committed, and not in the middle of the transaction itself. The clear drawback is that in-memory cache size grows uncontrollably and outside operations are forced to stay in-memory as well, with a higher risk to be lost after a crash. This is the first reason why you should never abuse transactions, in particular long-running ones are discouraged.
+WiredTiger stores all data, that can be a document or part of an index, in a tree of keys and values, like represented in the following image:
+
+![WiredTiger_updateStructure](./images/WiredTiger_updateStructure.png)
+
+When any transactional updates are made to a key's value, WiredTiger creates an update structure, invisible from the outside because not yet committed, containing the data changed and a pointer on to any later changes. Later update structures will append themselves to the previous update structure creating a chain of different versions of the value over time. The multiversion concurrency control I am going to talk about later is internally implemented using this tree structure. To preserve the MongoDB order within the WiredTiger storage engine, the update structure was extended with a "timestamp" field, that is used to get the exact state of the data when queried. Actually, this timestamp field is important because it is the only way to map WiredTiger cache entries to oplog entries when the transaction commits.
+
+At commit time, the update structure is converted to a series of oplog entries and the changes are made atomically available for querying on the primary and for the replication phase. In fact, every `mongod` instance maintains an operational log, i.e. the oplog, that is a specialized collection listing the most recent operations that have been applied to the database. The secondary members copy and apply the primary's oplog in an asynchronous process by reading batches of updates. Without timestamps, this synchronization would block read queries until a batch of updates were completed to ensure that no out of order writes are seen by users. With the addition of timestamps, it is possible to continue read queries using the timestamp from the start of the current batch: this means that secondary reads are not interrupted during the replication phase.
 
 ### Sessions Id
+
+Another remarkable step in the path to transactions was the introduction of `Session`s. Before version 3.6 there was no way to identify operations and track their progress. From version 3.6 any client operation is associated with a Logical Session, that has an ID called Logical Session Identifier, or just *lsid*. The lsid is automatically generated by the client and it is composed of an ID (a Guid) and a uid, which is a SHA256 digest fo the username.
+
+Since every operation is associated with an *lsid*, resource management has become way simpler: in order to stop and free resources, you just have to kill the logical session. At any given time, you can have at most one open transaction for a session, so if the session ends, then an eventual open transaction aborts. Logical sessions have been a great help for the transaction management, specifically the transactional operations grouping and clean-up.
 
 ---
 
 ## Consistency
 
-Let's start by saying that consistency in ACID is not the same as consistency in the CAP theorem, which is about data freshness. Instead ACID consistency means keeping data correctness after the execution of a transaction.
+Let's start by saying that consistency in ACID is not the same as consistency in the CAP theorem: the former is about database rules and correctness, for example the uniqueness of a value for a given key in documents in a collection. The latter is a logical guarantee that all clients see the same data at the same time, no matter which node they connect to.
+
+Regarding transactions, ACID consistency is guaranteed thanks to the atomic commit procedure. Before commit, all writes are stored in the primary member, but not yet visible. Only when the transaction commits, those writes are atomically replicated to the secondary members. For this reason, passing a `writeConcern` to a transactional statement does not really make sense, since it is going to live on the primary. The acknowledgement is meaningless as well, so if you try to do this, you are going to receive an error.
 
 ---
 
 ## Isolation
 
-In a SQL database, with the isolation level you can establish whether a transaction can see writes inside another concurrent transaction. It is basically a tradeoff between performances (max with the lowest isolation level) and accuracy. Some issues could arise depending on the isolation level chosen, but you are not forced to patch them all: sometimes they are so unlikely (or can be ignored) that it is not worth giving up on performances. Some of these issues are:
+In a SQL database, with the isolation level you can establish whether a transaction can see writes inside another concurrent transaction. It is basically a tradeoff between performances (max with the lowest isolation level) and accuracy. Some issues could arise dependently on the isolation level chosen, but you are not forced to patch them all: sometimes they are so unlikely (or can be ignored) that it is not worth giving up on performances. Some of these issues are:
 
 - **Dirty reads**: a dirty read occurs when a transaction is allowed to read data from a row that has been modified by another running transaction and not yet committed.
 
@@ -83,7 +95,7 @@ Read preference describes how MongoDB clients route read operations to the membe
 
 ### Read Concerns
 
-Depending on the pair (`readPreference`, `readConcern`) you could read different versions of the same document. Regarding the `readConcern`, there are 3 levels:
+Dependingly on the pair (`readPreference`, `readConcern`) you could read different versions of the same document. Regarding the `readConcern`, there are 3 levels:
 
 - **Local**: returns the most recent data available, but with the possibility of a future rollback. A rollback is necessary only if the primary had accepted write operations that the secondaries had not successfully replicated before the primary stepped down. Generally they are very rare and happens on network partitions, but do not occur when the primary fails and at least another replica member was able to replicate the primary's data. This means that if your `readPreference` is **Secondary**, with a **Local** read concern you will never get data that has been later rolled back. The only exception is when you read from a secondary that already replicated changes from a failed primary but is unreachable from the majority of the other replica set members: in this case the secondary must revert its changes as well (unless it becomes the new primary) and you could *successfully* experience a dirty/phantom read. It is like the *Read Uncommitted* isolation level.
 - **Majority**: returns data that has been acknowledged by a majority of the replica set only if the transaction commits with **Majority** write concern. Just because the majority of nodes acknowledged the update, it does not mean that the node you are reading from (unless it is the primary) has already received the fresh update. It simply guarantees that all the next reads are *monotonic*, that is you will never read documents that are later rolled back. It is like the *Read Committed* isolation level. In a sharded cluster it is a little more complex because snapshot views in different shards are not synchronized. If you need this additional guarantee, then use the **Snapshot** read concern.
@@ -95,7 +107,7 @@ Unfortunately, as for now the *Serializable* isolation level is not feasible for
 
 ## Durability
 
-When this property is guaranteed data are durable even after a system crash. Conceptually, it is not a difficult idea, but in practice it is very hard to achieve: usually logs are used to temporarily store data changes, and only at commit time these logs are written on disk. Changes become durable depending on the `writeConcern`, which is strictly bound to the `readConcern`.
+When this property is guaranteed data are durable even after a system crash. Conceptually, it is not a difficult idea, but in practice it is very hard to achieve: usually logs are used to temporarily store data changes, and only at commit time these logs are written on disk. Changes durability depends on the `writeConcern` value, which is strictly bound to the `readConcern`.
 
 This property can be applied at per-operation level outside transactions, but at per-transaction level for multi-document transactions. As opposed to `readConcern`, the `writeConcern` value is a lot more flexible and it is composed of:
 
@@ -130,7 +142,7 @@ There is no real perfect management of transactions, and living without them als
 
 ## MongoDB Document Model
 
-The MondoDB model is based on documents, which are like rows for a SQL database. It is very important to remember that depending on how we build our schema, we are also deciding whether we are going to need transactions or not. For example, consider the following schema to store users and their accounts (in a one-to-many relationship).
+The MondoDB model is based on documents, which are like rows for a SQL database. It is very important to remember that dependently on how we build our schema, we are also deciding whether we are going to need transactions or not. For example, consider the following schema to store users and their accounts (in a one-to-many relationship).
 
 ```
 // Users
@@ -172,7 +184,7 @@ In this case there is only one document to update and this change is guaranteed 
 
 ## What happens when we create a multi-document transaction?
 
-A MongoDB transaction is pretty different from a SQL transaction. In both models the concept of isolation level exists, but MongoDB discerns between before-commit and after-commit isolation. I have already talked about ACID properties and how MongoDB is able to guarantee them, but I have deliberately left out how a transaction is isolated in the before-commit phase (the after-commit phase is mainly regulated by the `readConcern`). First concept to understand in order to effectively work with transactions is the **snapshot** isolation level
+A MongoDB transaction is pretty different from a SQL transaction. In both models the concept of isolation level exists, but MongoDB discerns between before-commit and after-commit isolation. I have already talked about ACID properties and how MongoDB is able to guarantee them, but I have deliberately left out how a transaction is isolated in the before-commit phase (the after-commit phase is mainly regulated by the `readConcern`). First concept to understand in order to effectively work with transactions is the **snapshot** isolation level.
 
 ### **Snapshot** Isolation
 
@@ -192,9 +204,20 @@ Let's start by saying that this isolation is implemented using multiversion conc
 
 The biggest advantage of **snapshot** isolation is that it prevents dirty/phantom reads and non-repeatable reads, thus providing the maximum level of isolation in terms of "issues coverage". Moreover, MongoDB guarantees the *Read your Own Writes* property.
 
-MongoDB distinguishes between concurrent transaction/transaction and concurrent transaction/operation. The demo shows some examples but the main difference is that in the first case the second transaction rolls back, whereas in the second case the operation blocks behind the transaction commit and infinitely retries with backoff logic until `MaxTimeMS` is reached.
+When it has to deal with write-conflicts, MongoDB distinguishes between concurrent transaction/transaction and concurrent transaction/operation. In the first case the second transaction, which is the one that detects a write-conflict, rolls back and, dependently on the APIs used, it could retry or not. There are two classes of APIs:
 
-deadlocks?
+- **Callback API**: these APIs incorporates logic to
+    - retry the transaction as a whole if the transaction encounters a `TransientTransactionError`
+    - retry the commit operation if the commit encounters an `UnknownTransactionCommitResult`
+
+    The transaction ultimately aborts and throws if `MAX_WITH_TRANSACTION_TIMEOUT`, that is fixed to 2 minutes for the NodeJS driver, expires.
+
+- **Core API**: these APIs do **not** incorporate logic to retry the transaction when above errors occur, but the application should explicitly handle them.
+
+For concurrent transaction/operation, the reaction to a write-conflict is slightly different, in fact the operation blocks behind the transaction commit and infinitely retries with backoff logic until `MaxTimeMS` is reached. Write-conflict solutions shape a very solid strategy for deadlock prevention.
+
+Actually, writes in MongoDB has always been represented as transactions within the storage layer since WiredTiger became the primary storage engine. Therefore, internal write conflicts has always been handled like this, even prior to the introduction of transactions. Reads never lock documents.
+At the end, just a note on the optimization layer: no-op writes, i.e. write operations that do not modify the current version of a document, are not considered as effective writes, with the benefit that they do not lock any documents.
 
 ---
 
@@ -273,14 +296,12 @@ From version 4.2 the op-log maximum size is almost unlimited because every entry
 Beware that, especially when used in a production environment, MongoDB transactions still have several limitations:
 
 - Availability: only newest version of MongoDB support multi-document/distributed transactions. Their APIs are probably going to change in future versions.
-- Default configuration settings might need to be changed: the runtime duration limit is 60 seconds and if any locks cannot be acquired within 5 milliseconds the transaction automatically aborts.
-- Transactions do not support all available commands and could cause substantial delays since every DDL statement is blocked if operates on a collection involved in a transaction, and viceversa.
-- The complete isolation of transactions is dangerous when an outside update is in conflict with the transaction results, for example consider the following scenario:
-    - You have a transaction in progress
-    - An outside operation modifies or deletes one document
-    - The transaction changes with a `findOneAndUpdate` the same document modified/deleted early. Consider that the transaction cannot find out in advance that the document has been changed because it sees the old snapshot of data.
-
-    In this case, at commit time, the transaction aborts because MongoDB does not know how to solve the versions conflict. For the same logic, a transaction always reads stale data.
+- WiredTiger cache pressure: if you have many ongoing transactions, then the WiredTiger cache has to maintain all the different update structures seen early. This gets even worse if you plan to have long-running transactions with many write operations, keeping in memory the same snapshot throughout the transaction duration and stretching the update chain. All these document versions generate a certain level of cache pressure, that are mitigated by:
+    - `transactionLifetimeLimitSeconds`, that defaults to 60 seconds, and is like a timer for the duration of a transaction.
+    - read-only transactions: read-only operations do not build up volume in cache
+    - guidelines like the suggested maximum number of documents modified, that is 1000, and breaking a single long transaction up into many smaller transaction, when possible.
+- Default configuration settings might need to be changed: aside from the 60 seconds limit on transactions duration, if a lock cannot be acquired within 5 milliseconds the transaction automatically aborts.
+- Transactions do not support all available commands and could cause substantial delays, like with DDL statements, that are blocked until the intent lock taken on a collection is released.
 
 - If a chunks migration and a transaction interleave, the latter could aborts because of the impossibility of acquiring a lock on a moved document. Chunks migrations must wait for the end of ongoing transactions.
 
@@ -296,9 +317,16 @@ Use retryable writes whenever possible in order to avoid a transaction abortion 
 
 In a sharded environment, transactions have a heavier impact on performances and availability of your system. In particular, performances degrade a lot on two conditions: when there are in-progress chunk migrations and when the number of shards involved in a transaction starts to get high.
 
+---
 
+## Sources
 
-
+- [Official documentation](https://docs.mongodb.com/manual/core/transactions/)
+- [MongoDB 4 Update: Multi-Document ACID Transactions](https://www.mongodb.com/blog/post/mongodb-multi-document-acid-transactions-general-availability)
+- [Transactions Background](https://www.mongodb.com/blog/post/transactions-background-part-1-lowlevel-timestamps-in-mongodbwiredtiger)
+- [How and When to Use Multi-Document Distributed Transactions](https://www.youtube.com/watch?v=3x_Pf9rQGCo&t=723s)
+- [Are Transactions Right For You?](https://www.youtube.com/watch?v=tnciVR4Bysw)
+- [MongoDB 4.2 Brings Fully Distributed ACID Transactions (MongoDB World 2019 Keynote, part 2)](https://www.youtube.com/watch?v=iuj4Hh5EQvo&t=2s)
 
 
 
