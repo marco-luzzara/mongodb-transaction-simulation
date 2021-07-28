@@ -1,4 +1,4 @@
-class MoneyTransaction {
+class MoneyTransfer {
     constructor(from, to, value) {
         this.from = from;
         this.to = to;
@@ -16,4 +16,4 @@ class MoneyTransaction {
     }
 }
 
-module.exports = MoneyTransaction;
+module.exports = MoneyTransfer;

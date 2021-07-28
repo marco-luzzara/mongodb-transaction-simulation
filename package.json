@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "DOTENV_CONFIG_PATH=envs/mongo_replica/.env jest --setupFiles dotenv/config",
+    "test_single_describe": "DOTENV_CONFIG_PATH=envs/mongo_replica/.env jest --detectOpenHandles --setupFiles dotenv/config -t",
     "start_replicaSet": "node -r dotenv/config index.js dotenv_config_path=envs/mongo_replica/.env"
   },
   "repository": {
@@ -23,9 +24,7 @@
   "homepage": "https://github.com/marco-luzzara/mongodb-transaction-simulation#readme",
   "dependencies": {
     "dotenv": "^8.2.0",
-    "express": "^4.17.1",
-    "mongodb": "^3.6.4",
-    "mongoose": "^5.12.0"
+    "mongodb": "^3.6.4"
   },
   "devDependencies": {
     "jest": "^26.6.3"

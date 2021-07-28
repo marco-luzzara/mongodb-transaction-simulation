@@ -35,13 +35,23 @@ function createClientForReplicaSet() {
     return client;
 }
 
-const client = createClientForReplicaSet();
+const client_pool = [createClientForReplicaSet()];
 
-module.exports = async function (cb) {
-    if (!client.isConnected())
-        await client.connect();
-    
-    const db = client.db(DB_NAME);
+module.exports = function (client_id) {
+    if (client_id === undefined)
+        client_id = 0;
 
-    return await cb(client, db);
+    if (client_pool[client_id] === undefined)
+        client_pool[client_id] = createClientForReplicaSet();
+
+    return async function (cb, useDb) {
+        const client = client_pool[client_id];
+        if (!client.isConnected())
+            await client.connect();
+        
+        const dbName = useDb !== undefined ? useDb : DB_NAME;
+        const db = client.db(dbName);
+
+        return await cb(client, db);
+    }
 }

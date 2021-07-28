@@ -1,7 +1,9 @@
-const MoneyTransaction = require("../model/moneyTransaction");
-const constants = require('../constants');
+const MoneyTransfer = require("../model/moneyTransfer");
 
-const clientWrapper = require("../util/mongoClientWrapper");
+const clientWrapper = require("../util/mongoClientWrapper")();
+const accountRepository = require("./accountRepository")
+
+const constants = require('../constants');
 const ACCOUNT_COLL = constants.ACCOUNT_COLL;
 const TRANSACTION_COLL = constants.TRANSACTION_COLL;
 
@@ -28,37 +30,37 @@ async function freeze(seconds) {
     });
 }
 
-async function createTransaction(from, to, value, sessionConfig = {}) {
+async function createMoneyTransfer(from, to, value, sessionConfig = {}) {
     return await clientWrapper(async (client, db) => {
-        const newTransaction = new MoneyTransaction(from, to, value);
+        const newTransfer = new MoneyTransfer(from, to, value);
         
         sessionConfig = {...sessionDefaultConfig, ...sessionConfig}
 
-        let moneyTransactionId = undefined;
+        let moneyTransferId = undefined;
         await client.withSession(sessionConfig, async (session) => {
             await session.withTransaction(async () => {
                 const insertResult = await db.collection(TRANSACTION_COLL)
-                    .insertOne(newTransaction, { session });
+                    .insertOne(newTransfer, { session });
 
                 if (insertResult.insertedCount === 0)
-                    throw new Error("no transaction inserted");
+                    throw new Error("No transfer inserted");
 
                 await freeze(3)
 
-                await changeBalance(db, from, -value, session);
+                await accountRepository.increaseBalance(from, -value, {}, { session });
 
                 await freeze(3);
 
-                await changeBalance(db, to, value, session);
+                await accountRepository.increaseBalance(to, value, {}, { session });
 
-                moneyTransactionId = insertResult.insertedId;
-            }, sessionConfig);
+                moneyTransferId = insertResult.insertedId;
+            }, sessionConfig); //unnecessary here because already specified for the session
         });
 
-        return moneyTransactionId;
+        return moneyTransferId;
     });
 }
 
 module.exports = {
-    createTransaction
+    createMoneyTransfer
 }
