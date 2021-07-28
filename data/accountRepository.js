@@ -97,7 +97,7 @@ async function deleteAllAccount(collOptions = {}, operationOptions = {}) {
                     "$in": owners
                 }
             }, operationOptions);
-        const delTransfers = await db.collection(TRANSACTION_COLL, options)
+        const delTransfers = await db.collection(TRANSACTION_COLL, collOptions)
             .deleteMany({
                 "$or": [
                     { 
@@ -111,7 +111,7 @@ async function deleteAllAccount(collOptions = {}, operationOptions = {}) {
                         } 
                     }
                 ]
-            });
+            }, operationOptions);
 
         return {
             "deletedUsers": delUsers,
