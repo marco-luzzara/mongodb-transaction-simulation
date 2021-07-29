@@ -1,5 +1,30 @@
 # MongoDB Transactions
 
+- [Introduction](#introduction)
+- [Do I really need transactions in a NoSQL DBMS?](#do-i-really-need-transactions-in-a-nosql-dbms)
+    - [Can I completely avoid them?](#can-i-completely-avoid-them)
+- [MongoDB Document Model](#mongodb-document-model)
+- [ACID Properties](#acid-properties)
+- [Atomicity](#atomicity)
+	- [WiredTiger Cache](#wiredtiger-cache)
+	- [Sessions](#sessions)
+- [Consistency](#consistency)
+- [Isolation](#isolation)
+    - [Read Preference](#read-preference)
+    - [Read Concerns](#read-concerns)
+	- [What is the `ClusterTime`?](#what-is-the-clustertime)
+- [Durability](#durability)
+- [What happens when we create a multi-document transaction?](#what-happens-when-we-create-a-multi-document-transaction)
+    - [Snapshot Isolation](#snapshot-isolation)
+- [How does Distributed Transactions work?](#how-does-distributed-transactions-work)
+- [Limitations and Benefits](#limitations-and-benefits)
+- [Conclusions](#conclusions)
+- [Sources](#sources)
+
+---
+
+## Introduction
+
 Transactions have been introduced in MongoDB 4.0 with a limited support on replica sets only, from version 4.2 they are available in sharded clusters too. This feature was the result of 9 years of research and development from the MongoDB team, but the surprising fact is that performances of non-transactional operations were not degraded even after this additional complexity in the core logic. Essentially, upgrading to a transactions-supporting version of MongoDB would not make your application less performant.
 
 The purpose of this report is to explain what you can do with transactions and when to use them in order to do the best choice in your production environment. Assuming you conceptually know what a transaction is, before looking at the peculiarities of MongoDB transactions, it is important to understand if and when they are necessary.
@@ -85,7 +110,7 @@ As I said, MongoDB Transactions guarantee ACID properties, which are:
 
 Atomicity is a very difficult requirement in a NoSQl database like MongoDB. A reason could be that one of the priority of a NoSQL database is scaling: ensuring atomicity for a transaction that involves many shards is definitely more complex than doing it for a single node. So, what are the protagonists that made this implementation possible?
 
-### Wired Tiger Cache
+### WiredTiger Cache
 
 The transaction path started when MongoDB team was using MMapV1, which provided ACID properties in a non-multi-document and non-multi-collection transaction. Next, they decided to integrate WiredTiger as the primary storage layer and it is currently the default and the only one supporting transactions. This storage engine leverages an internal in-memory cache to store changes from the moment when the transaction started, before flushing them to disk.
 
