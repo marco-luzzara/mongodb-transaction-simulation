@@ -46,17 +46,9 @@ describe('Locking issues', () => {
                     "w": "1"
                 }
             }, async (client, session, db) => {
-                let result = await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                    { "owner": "test2" },
-                    { "$inc": { "balance": 10 } },
-                    { session }
-                );
+                await accountRepository.increaseBalance("test2", 10, {}, { session });
     
-                await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                    { "owner": "test2" },
-                    { "$inc": { "balance": 10 } },
-                    { "maxTimeMS": 2000 }
-                );
+                await accountRepository.increaseBalance("test2", 10, {}, { "maxTimeMS": 2000 });
             });
         }
         
@@ -65,11 +57,7 @@ describe('Locking issues', () => {
 
     test('Outside reads still possible when documents are locked in a transaction', async () => {
         await transactionWithCustomOptions({}, async (client, session, db) => {
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test2" },
-                { "$set": { "balance": 10 } },
-                { session }
-            );
+            await accountRepository.increaseBalance("test2", 10, {}, { session });
 
             const user = await db.collection(ACCOUNT_COLL).findOne(
                 { "owner": "test2" }
@@ -86,22 +74,12 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
         let writeConflict = false;
 
         await transactionWithCustomOptions(options, async (client, session, db) => {
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test2" },
-                { "$inc": { "balance": 10 } },
-                { session }
-            );
+            await accountRepository.increaseBalance("test2", 10, {}, { session });
 
             await client.withSession(async (session1) => {
                 await session1.withTransaction(async () => {
                     try {
-                        await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                            { "owner": "test2" },
-                            { "$inc": { "balance": 10 } },
-                            { 
-                                session: session1
-                            }
-                        );
+                        await accountRepository.increaseBalance("test2", 10, {}, { session: session1 });
                     }
                     catch (exc) {
                         expect(exc).toMatchObject({
@@ -135,26 +113,20 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
         const options = {};
 
         await transactionWithCustomOptions(options, async (client, session, db) => {
-            console.log("Before 1st Update", await getUserBalance(db));
+            // the snapshot is taken after the first operation, not when the transaction starts
+            await accountRepository.increaseBalance("test2", 10);
+            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
 
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test2" },
-                { "$inc": { "balance": 10 } }
-            );
+            // the snapshot is taken here
+            expect(await accountRepository.getBalance("test2", {}, { session })).toEqual(DEFAULT_BALANCE + 10);
+            await accountRepository.increaseBalance("test2", 10, {}, { session });
 
-            console.log("After 1st/Before 2nd Update", await getUserBalance(db, { session }));
-
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test2" },
-                { "$inc": { "balance": 10 } },
-                { session }
-            );
-
-            console.log("After 2nd Update", await getUserBalance(db));
+            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
         });
 
         await clientWrapper(async (client, db) => {
-            console.log("After transaction commit", await getUserBalance(db));
+            // after the transaction commits, the balance reflects transactional updates
+            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 20);
         });
     });
 
@@ -163,30 +135,18 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
         let writeConflict = false;
 
         await transactionWithCustomOptions(options, async (client, session, db) => {
-            console.log("Before 1st Update", await getUserBalance(db, { session }));
+            expect(await accountRepository.getBalance("test2", {}, { session })).toEqual(DEFAULT_BALANCE);
 
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test2" },
-                { "$inc": { "balance": 10 } }
-            );
+            await accountRepository.increaseBalance("test2", 10);
 
-            console.log("After 1st/Before 2nd Update - inside", await getUserBalance(db, { session }));
-            console.log("After 1st/Before 2nd Update - outside", await getUserBalance(db));
+            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
+            expect(await accountRepository.getBalance("test2", {}, { session })).toEqual(DEFAULT_BALANCE);
 
-            await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                { "owner": "test1" },
-                { "$inc": { "balance": 10 } },
-                { session }
-            );
-
-            console.log("Until conflict-free the transaction continues...");
+            // there is no conflict here because the document modified is different
+            await accountRepository.increaseBalance("test1", 10, {}, { session });
 
             try {
-                await db.collection(ACCOUNT_COLL).findOneAndUpdate(
-                    { "owner": "test2" },
-                    { "$inc": { "balance": 10 } },
-                    { session }
-                );
+                await accountRepository.increaseBalance("test2", 10, {}, { session });
             }
             catch(exc) {
                 expect(exc).toMatchObject({
@@ -199,12 +159,10 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
                 // without ending the session, the transaction is retried
                 await session.endSession();
             }
-
-            console.log("After 2nd Update", await getUserBalance(db));
         });
 
         await clientWrapper(async (client, db) => {
-            console.log("After transaction commit", await getUserBalance(db));
+            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
         });
 
         expect(writeConflict).toBeTruthy();
@@ -212,16 +170,12 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
 
     test('Concurrent transaction/operation -> newly inserted rows are invisible, no phantom reads', async () => {
         const options = {};
-        let writeConflict = false;
 
         await transactionWithCustomOptions(options, async (client, session, db) => {
             const beforeInsertUsers = await db.collection(ACCOUNT_COLL).countDocuments({}, { session });
-            console.log("Before insert", beforeInsertUsers);
 
             await accountRepository.insertAccount("test3", 2000);
-
             const afterInsertUsers = await db.collection(ACCOUNT_COLL).countDocuments({}, { session });
-            console.log("After insert", afterInsertUsers);
 
             expect(beforeInsertUsers).toEqual(afterInsertUsers);
         });

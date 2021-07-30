@@ -24,6 +24,25 @@ async function getAccountTransfers(owner, collOptions = {}, operationOptions = {
     });
 }
 
+async function getBalance(owner, collOptions = {}, operationOptions = {}) {
+    return await clientWrapper(async (client, db) => {
+        const objBalance = await db.collection(ACCOUNT_COLL, collOptions)
+            .findOne({ "owner": owner },
+                {
+                    projection: {
+                        "_id": 0,
+                        "balance": 1
+                    },
+                    ...operationOptions
+                });
+        
+        if (objBalance === undefined)
+            throw new Error(`account with owner ${owner} is not found`);
+
+        return objBalance.balance;
+    });
+}
+
 async function increaseBalance(owner, value, collOptions = {}, operationOptions = {}) {
     return await clientWrapper(async (client, db) => {
         const updateResult = await db.collection(ACCOUNT_COLL, collOptions)
@@ -121,7 +140,8 @@ async function deleteAllAccount(collOptions = {}, operationOptions = {}) {
 }
 
 module.exports = {
-    getAccounts, 
+    getAccounts,
+    getBalance,
     increaseBalance,
     insertAccount,
     getAccountTransfers,
