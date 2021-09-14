@@ -112,13 +112,19 @@ Atomicity is a very difficult requirement in a NoSQl database like MongoDB. A re
 
 ### WiredTiger Cache
 
-The transaction path started when MongoDB team was using MMapV1, which provided ACID properties in a non-multi-document and non-multi-collection transaction. Next, they decided to integrate WiredTiger as the primary storage layer and it is currently the default and the only one supporting transactions. This storage engine leverages an internal in-memory cache to store changes from the moment when the transaction started, before flushing them to disk.
+The transaction path started when MongoDB team was using MMapV1, which provided ACID properties in a non-multi-document and non-multi-collection transaction. Next, they decided to integrate WiredTiger as the primary storage layer and it is currently the default and the only one supporting transactions. This storage engine leverages an internal in-memory cache to store changes from the moment when the transaction started, before flushing them to disk. The migration from MMapV1 to WiredTiger happened because of many reasons actually:
+- It is a lot faster for write-heavy workload
+- It handles document-level locking natively
+- It supports multi-document and multi-collection transactions
+- It supports features like compaction, compression and encryption
 
-WiredTiger stores all data, that can be a document or part of an index, in a tree of keys and values, like represented in the following image:
+WiredTiger cache stores all data, that can be a document or part of an index, in a btree where leaves correspond to data pages, like represented in the following image:
 
 ![WiredTiger_updateStructure](./images/WiredTiger_updateStructure.png)
 
-When any transactional updates are made to a key's value, WiredTiger creates an update structure, invisible from the outside because not yet committed, containing the data changed and a pointer on to any later changes. Later update structures will append themselves to the previous one creating a chain of different versions of the value over time. The multiversion concurrency control I am going to talk about later is internally implemented using this tree structure. To preserve the MongoDB order within the WiredTiger storage engine, the update structure was extended with a "timestamp" field, that is used to get the exact state of the data when queried. Actually, this timestamp field is important because it is the only way to map WiredTiger cache entries to oplog entries when the transaction commits.
+When any transactional updates are made to a document, WiredTiger creates an update structure, invisible from the outside because not yet committed, containing the data changed and a pointer on to any later changes. Later update structures will append themselves to the previous one creating a chain of different versions of the value over time. The multiversion concurrency control I am going to talk about later is internally implemented using this tree structure. Eventually, we can say that the WiredTiger cache is arranged as a btree whose leaves are linked lists of updates starting from a dirty page, compacted and flushed to disk after a checkpoint.
+
+To preserve the MongoDB order within the WiredTiger storage engine, the update structure was extended with a "timestamp" field, that is used to get the exact state of the data when queried. Actually, this timestamp field is important because it is the only way to map WiredTiger cache entries to oplog entries when the transaction commits. To sum up, because we have these two clocks, the WiredTiger clock (hypothetically different for each node) and the MongoDB clock (distributed and common to all the nodes), at a certain point the second one must prevail to allow the correct order or writes during replication.
 
 At commit time, the update structure is converted to a series of oplog entries and the changes are made atomically available for querying on the primary and for the replication phase. In fact, every `mongod` instance maintains an operational log, i.e. the oplog, that is a specialized collection listing the most recent operations that have been applied to the database. The secondary members copy and apply the primary's oplog in an asynchronous process by reading batches of updates, parallelizing them into multiple threads to keep up with the primary's pace. Without timestamps, this synchronization would block read queries until a batch of updates were completed to ensure that no out of order writes are seen by users. With the addition of timestamps, it is possible to continue read queries using the timestamp from the start of the current batch: this means that secondary reads are not interrupted during the replication phase.
 
@@ -382,6 +388,7 @@ More importantly, having distributed transactions does not mean that you should 
 - [Performance Best Practices: Transactions and Read / Write Concerns](https://www.mongodb.com/blog/post/performance-best-practices-transactions-and-read--write-concerns)
 - [Distributed Transactions: With Great Power Comes Great Responsibility](https://www.youtube.com/watch?v=hlNDSo5XDPQ&t=340s)
 - [Implementation of Cluster-wide Logical Clock and Causal Consistency in MongoDB](https://dl.acm.org/doi/pdf/10.1145/3299869.3314049)
+- [MongoDB: Building a New Transactional Model](https://www.youtube.com/watch?v=0Dj96yFl1SE)
 
 
 
