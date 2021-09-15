@@ -262,7 +262,7 @@ Let's start by saying that this isolation is implemented using multiversion conc
 
 - Conflicts are solved in a fail-fast way: suppose you have a transaction in progress and an outside operation modifies or deletes one document. That same document is later modified by a transactional `findOneAndUpdate`. There is no reason to wait for commit, it is already clear that it will produce a `WriteConflict`. For this reason MongoDB marks this error as `TransientTransactionError`, making the transaction rollback and immediately retrying it with the new snapshot.
 
-The biggest advantage of **snapshot** isolation is that it prevents dirty/phantom reads and non-repeatable reads, thus providing the maximum level of isolation in terms of "issues coverage". Moreover, MongoDB guarantees the *Read your Own Writes* property.
+The biggest advantage of **snapshot** isolation is that it prevents dirty/phantom reads and non-repeatable reads, thus providing the maximum level of isolation in terms of "issues coverage".
 
 When it has to deal with write-conflicts, MongoDB distinguishes between concurrent transaction/transaction and concurrent transaction/operation. In the first case the second transaction, which is the one that detects a write-conflict, rolls back and, dependently on the APIs used, it could retry or not. There are two classes of APIs:
 
@@ -358,7 +358,7 @@ Beware that, especially when used in a production environment, MongoDB transacti
     - `transactionLifetimeLimitSeconds`, that defaults to 60 seconds, and is like a timer for the duration of a transaction.
     - read-only transactions: read-only operations do not build up volume in cache
     - guidelines like the suggested maximum number of documents modified, that is 1000, and breaking a single long transaction up into many smaller transaction, when possible.
-- Default configuration settings might need to be changed: aside from the 60 seconds limit on transactions duration, if a lock cannot be acquired within 5 milliseconds the transaction automatically aborts.
+- Default configuration settings might need to be changed: additionally to the 60 seconds limit on transactions duration, if a lock cannot be acquired within 5 milliseconds the transaction automatically aborts. You can use `maxTransactionLockRequestTimeoutMillis` to adjust how long a transaction waits to acquire locks.
 - Transactions do not support all available commands and could cause substantial delays, like with DDL statements, that are blocked until the intent lock taken on a collection is released.
 - If a chunks migration and a transaction interleave, the latter could aborts because of the impossibility of acquiring a lock on a moved document. Chunks migrations must wait for the end of ongoing transactions.
 
@@ -389,15 +389,3 @@ More importantly, having distributed transactions does not mean that you should 
 - [Distributed Transactions: With Great Power Comes Great Responsibility](https://www.youtube.com/watch?v=hlNDSo5XDPQ&t=340s)
 - [Implementation of Cluster-wide Logical Clock and Causal Consistency in MongoDB](https://dl.acm.org/doi/pdf/10.1145/3299869.3314049)
 - [MongoDB: Building a New Transactional Model](https://www.youtube.com/watch?v=0Dj96yFl1SE)
-
-
-
-
-
-
-
-
-
-
-
-
