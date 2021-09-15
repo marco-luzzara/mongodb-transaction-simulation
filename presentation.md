@@ -218,7 +218,7 @@ Locally, every node uses the Snapshot Isolation, but what data should be read in
     </li>
 </ul>
 
-<p class="fragment fade-in-then-semi-out" data-fragment-index="4">Let's start with the first two `ReadConcern`s</p>
+<p class="fragment fade-in-then-semi-out" data-fragment-index="4">Let's start with the first two <code>ReadConcern</code>s</p>
 
 ---
 
@@ -230,7 +230,7 @@ Locally, every node uses the Snapshot Isolation, but what data should be read in
 
 ## **`snapshot`** Readconcern
 
-By using `local` or `majority`, you get consistent snapshot per replica set, wherease with `snapshot` read concern all the shards take a snapshot at the same `ClusterTime` 
+By using `local` or `majority`, you get consistent snapshot per replica set, whereas with `snapshot` read concern all the shards take a snapshot at the same `ClusterTime` 
 
 you must commit with `{w: majority}`
 
@@ -368,3 +368,29 @@ In the end, if all shards are ready, then the coordinator sends the commit messa
     }
 }
 ```
+
+---
+
+## Transaction Limitations and Benefits
+
+- ❌ WiredTiger cache pressure for long-running transactions <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="1" -->
+- ❌ 5ms to acquire a lock, otherwise aborts <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="2" -->
+- ❌ DDL statements and a few commands cannot be used <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="3" -->
+- ❌ In sharded clusters, a transaction could conflict with chunk migrations if they interleave <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="4" -->
+- ✅ You reduce commit latency for many sequential writes <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="5" -->
+
+---
+
+## Conclusions
+
+MongoDB Team estimated that 80-90% of (MongoDB) projects do not need transactions, and if you do then keep them as short as possible. <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="1" -->
+
+Distributed transactions impact is even higher and could remarkably degrade performances. <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="2" -->
+
+Consider transactions as the last resort if you cannot solve a problem by leveraging the flexible data model. <!-- .element: class="fragment fade-in-then-semi-out" data-fragment-index="5" -->
+
+---
+
+## Sources
+
+This presentation is an excerpt of the report you can find [here](https://github.com/marco-luzzara/mongodb-transaction-simulation/blob/main/doc/README.md)
