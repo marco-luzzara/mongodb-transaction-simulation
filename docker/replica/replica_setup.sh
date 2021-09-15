@@ -21,7 +21,7 @@ then
 
     openssl rand -base64 756 > ./keys/mongo_replica.key
     chmod 400 ./keys/mongo_replica.key
-    chown 999:999 ./keys/mongo_replica.key
+    sudo chown 999:999 ./keys/mongo_replica.key
 fi
 
 chmod a+x replica_config_script.sh

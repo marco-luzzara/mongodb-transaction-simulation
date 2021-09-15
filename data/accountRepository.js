@@ -12,6 +12,13 @@ async function getAccounts(collOptions = {}, operationOptions = {}) {
     })
 }
 
+async function getAccount(owner, collOptions = {}, operationOptions = {}) {
+    return await clientWrapper(async (client, db) => {
+        return await db.collection(ACCOUNT_COLL, collOptions)
+            .findOne({ "owner": owner }, operationOptions);
+    })
+}
+
 async function getAccountTransfers(owner, collOptions = {}, operationOptions = {}) {
     return await clientWrapper(async (client, db) => {
         return await db.collection(TRANSACTION_COLL, collOptions)
@@ -141,6 +148,7 @@ async function deleteAllAccount(collOptions = {}, operationOptions = {}) {
 
 module.exports = {
     getAccounts,
+    getAccount,
     getBalance,
     increaseBalance,
     insertAccount,
