@@ -229,11 +229,42 @@ describe('Transaction/Transaction conflict', () => {
         // the inner transaction aborted but the outer transaction commits successfully
         expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
     });
+});
 
-    test('Concurrent transaction/operation -> newly inserted rows are invisible, no phantom reads', async () => {
-        const options = {};
+describe('Isolation issues', () => {
+    test('Cannot see uncommitted changes, no dirty reads', async () => {
+        await transactionWithCustomOptions({}, async (client, session, db) => {
+            const beforeUpdateBalance = await accountRepository.getBalance("test2", {}, { session });
 
-        await transactionWithCustomOptions(options, async (client, session, db) => {
+            await client.withSession(async (session1) => {
+                await session1.withTransaction(async () => {
+                    await accountRepository.increaseBalance("test2", 10, {}, { session: session1 });
+
+                    const afterUpdateBalance = await accountRepository.getBalance("test2", {}, { session });
+
+                    expect(beforeUpdateBalance).toEqual(afterUpdateBalance);
+                });
+            });
+        });
+    });
+
+    test('read values do not change, no non-repeatable reads', async () => {
+        await transactionWithCustomOptions({}, async (client, session, db) => {
+            const beforeUpdateBalance = await accountRepository.getBalance("test2", {}, { session });
+            await client.withSession(async (session1) => {
+                await session1.withTransaction(async () => {
+                    await accountRepository.increaseBalance("test2", 10, {}, { session: session1 });
+                });
+            });
+
+            const afterUpdateBalance = await accountRepository.getBalance("test2", {}, { session });
+            
+            expect(beforeUpdateBalance).toEqual(afterUpdateBalance);
+        });
+    });
+
+    test('Newly inserted rows are invisible, no phantom reads', async () => {
+        await transactionWithCustomOptions({}, async (client, session, db) => {
             const beforeInsertUsers = await db.collection(ACCOUNT_COLL).countDocuments({}, { session });
 
             await accountRepository.insertAccount("test3", 2000);
