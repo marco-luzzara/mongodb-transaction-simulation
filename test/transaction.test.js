@@ -16,6 +16,14 @@ async function transactionWithCustomOptions(options, cb) {
     });
 }
 
+async function sessionWithCustomOptions(options, cb) {
+    await clientWrapper(async (client, db) => {
+        await client.withSession(async (session) => {
+            await cb(client, session, db);
+        });
+    });
+}
+
 beforeEach(async () => {
     await clientWrapper(async (client, db) => {
         await accountRepository.insertAccount("test1", DEFAULT_BALANCE);
@@ -72,10 +80,8 @@ describe('General', () => {
             expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
         });
 
-        await clientWrapper(async (client, db) => {
-            // after the transaction commits, the balance reflects transactional updates
-            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 20);
-        });
+        // after the transaction commits, the balance reflects transactional updates
+        expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 20);
     });
 })
 
@@ -122,30 +128,58 @@ describe('Transaction/Operation conflict', () => {
                 });
 
                 retries += 1;
-                // without ending the session, the transaction is retried
+                // without ending the session, the transaction is retried again
                 if (retries == 3)
                     await session.endSession();
             }
         });
 
-        await clientWrapper(async (client, db) => {
-            // the transaction eventually aborts but outside writes remain
-            expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10 * (retries));
+        expect(retries).toEqual(3);
+        // the transaction eventually aborts but outside writes remain
+        expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10 * (retries));
+    });
+
+    test('TransientTransactionError without retryable writes (Core API)', async () => {
+        expect.assertions(2);
+
+        await sessionWithCustomOptions({}, async (client, session, db) => {
+            session.startTransaction();
+            // the snapshot is taken
+            await accountRepository.increaseBalance("test1", 10, {}, { session });
+
+            // test2 is updated outside
+            await accountRepository.increaseBalance("test2", 10);
+
+            try {
+                // test2 cannot be updated inside transaction because the snapshot points to a 
+                // different document than the actual one
+                await accountRepository.increaseBalance("test2", 10, {}, { session });
+            }
+            catch(exc) {
+                expect(exc).toMatchObject({
+                    codeName: 'WriteConflict',
+                    message: 'WriteConflict error: this operation conflicted with another operation. Please retry your operation or multi-document transaction.',
+                    errorLabels: ['TransientTransactionError']
+                });
+            }
         });
+
+        // the transaction eventually aborts but outside writes remain
+        expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
     });
 });
 
-describe('Concurrent transactions vs. Concurrent transaction and operation', () => {
-    test('Concurrent transactions -> WriteConflict (TransientError), second trx rollbacks and retries', async () => {
-        const options = {};
-        let writeConflict = false;
+describe('Transaction/Transaction conflict', () => {
+    test('TransientTransactionError with retryable writes (Callback API)', async () => {
+        let retries = 0;
 
-        await transactionWithCustomOptions(options, async (client, session, db) => {
+        await transactionWithCustomOptions({}, async (client, session, db) => {
             await accountRepository.increaseBalance("test2", 10, {}, { session });
 
             await client.withSession(async (session1) => {
                 await session1.withTransaction(async () => {
                     try {
+                        // the document is already locked by the other transaction, therefore WriteConflict
                         await accountRepository.increaseBalance("test2", 10, {}, { session: session1 });
                     }
                     catch (exc) {
@@ -155,15 +189,45 @@ describe('Concurrent transactions vs. Concurrent transaction and operation', () 
                             errorLabels: ['TransientTransactionError']
                         });
 
-                        writeConflict = true;
-                        // without ending the session, the transaction is retried
-                        await session.endSession();
+                        retries += 1;
+
+                        // without ending the session, the transaction is retried again
+                        if (retries == 3)
+                            await session1.endSession();
                     }
-                }, options);
+                }, {});
             });
         });
 
-        expect(writeConflict).toBeTruthy();
+        // the inner transaction aborted but the outer transaction commits successfully
+        expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
+        expect(retries).toEqual(3);
+    });
+
+    test('TransientTransactionError without retryable writes (Core API)', async () => {
+        expect.assertions(2);
+
+        await transactionWithCustomOptions({}, async (client, session, db) => {
+            await accountRepository.increaseBalance("test2", 10, {}, { session });
+
+            await client.withSession(async (session1) => {
+                session1.startTransaction();
+                try {
+                    // the document is already locked by the other transaction, therefore WriteConflict
+                    await accountRepository.increaseBalance("test2", 10, {}, { session: session1 });
+                }
+                catch (exc) {
+                    expect(exc).toMatchObject({
+                        codeName: 'WriteConflict',
+                        message: 'WriteConflict error: this operation conflicted with another operation. Please retry your operation or multi-document transaction.',
+                        errorLabels: ['TransientTransactionError']
+                    });
+                }
+            });
+        });
+
+        // the inner transaction aborted but the outer transaction commits successfully
+        expect(await accountRepository.getBalance("test2")).toEqual(DEFAULT_BALANCE + 10);
     });
 
     test('Concurrent transaction/operation -> newly inserted rows are invisible, no phantom reads', async () => {
